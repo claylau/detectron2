@@ -27,31 +27,40 @@ DatasetCatalog.register("my_dataset", get_dicts)
 ```
 
 Here, the snippet associates a dataset "my_dataset" with a function that returns the data.
-If you do not modify downstream code (i.e., you use the standard data loader and data mapper),
-then the function has to return a list of dicts in detectron2's standard dataset format, described
-next.
+The registration stays effective until the process exists.
+
+The function can processes data from its original format into either one of the following:
+1. Detectron2's standard dataset dict, described below. This will work with many other builtin
+	 features in detectron2, so it's recommended to use it when it's sufficient for your task.
+2. Your custom dataset dict. You can also returns arbitrary dicts in your own format,
+	 such as adding extra keys for new tasks.
+	 Then you will need to handle them properly in the downstream as well.
+	 See below for more details.
+
+#### Standard Dataset Dicts
 
 For standard tasks
 (instance detection, instance/semantic/panoptic segmentation, keypoint detection),
-we use a format similar to COCO's json annotations
-as the basic dataset representation.
+we load the original dataset into `list[dict]` with a specification similar to COCO's json annotations.
+This is our standard representation for a dataset.
 
-The format uses one dict to represent the annotations of
-one image. The dict may have the following fields.
+Each dict contains information about one image.
+The dict may have the following fields.
 The fields are often optional, and some functions may be able to
 infer certain fields from others if needed, e.g., the data loader
-can load an image from "file_name" if the "image" field is not available.
+will load the image from "file_name" and load "sem_seg" from "sem_seg_file_name".
 
-+ `file_name`: the full path to the image file.
++ `file_name`: the full path to the image file. Will apply rotation and flipping if the image has such exif information.
 + `sem_seg_file_name`: the full path to the ground truth semantic segmentation file.
-+ `image`: the image as a numpy array.
-+ `sem_seg`: semantic segmentation ground truth in a 2D numpy array. Values in the array represent
-   category labels.
++ `sem_seg`: semantic segmentation ground truth in a 2D `torch.Tensor`. Values in the array represent
+   category labels starting from 0.
 + `height`, `width`: integer. The shape of image.
-+ `image_id` (str): a string to identify this image. Mainly used by certain datasets
-	during evaluation to identify the image, but a dataset may use it for different purposes.
-+ `annotations` (list[dict]): the per-instance annotations of every
-  instance in this image. Each annotation dict may contain:
++ `image_id` (str or int): a unique id that identifies this image. Used
+	during evaluation to identify the images, but a dataset may use it for different purposes.
++ `annotations` (list[dict]): each dict corresponds to annotations of one instance
+  in this image. Images with empty `annotations` will by default be removed from training,
+	but can be included using `DATALOADER.FILTER_EMPTY_ANNOTATIONS`.
+	Each dict may contain the following keys:
   + `bbox` (list[float]): list of 4 numbers representing the bounding box of the instance.
   + `bbox_mode` (int): the format of bbox.
     It must be a member of
@@ -64,9 +73,11 @@ can load an image from "file_name" if the "image" field is not available.
       of the object. Each `list[float]` is one simple polygon in the format of `[x1, y1, ..., xn, yn]`.
       The Xs and Ys are either relative coordinates in [0, 1], or absolute coordinates,
       depend on whether "bbox_mode" is relative.
-    + If `dict`, it represents the per-pixel segmentation mask in COCO's RLE format.
+    + If `dict`, it represents the per-pixel segmentation mask in COCO's RLE format. The dict should have
+			keys "size" and "counts". You can convert a uint8 segmentation mask of 0s and 1s into
+			RLE format by `pycocotools.mask.encode(np.asarray(mask, order="F"))`.
   + `keypoints` (list[float]): in the format of [x1, y1, v1,..., xn, yn, vn].
-    v[i] means the visibility of this keypoint.
+    v[i] means the [visibility](http://cocodataset.org/#format-data) of this keypoint.
     `n` must be equal to the number of keypoint categories.
     The Xs and Ys are either relative coordinates in [0, 1], or absolute coordinates,
     depend on whether "bbox_mode" is relative.
@@ -74,17 +85,21 @@ can load an image from "file_name" if the "image" field is not available.
     Note that the coordinate annotations in COCO format are integers in range [0, H-1 or W-1].
     By default, detectron2 adds 0.5 to absolute keypoint coordinates to convert them from discrete
     pixel indices to floating point coordinates.
-  + `iscrowd`: 0 or 1. Whether this instance is labeled as COCO's "crowd region".
+  + `iscrowd`: 0 or 1. Whether this instance is labeled as COCO's "crowd
+    region". Don't include this field if you don't know what it means.
+
+The following keys are used by Fast R-CNN style training, which is rare today.
+
 + `proposal_boxes` (array): 2D numpy array with shape (K, 4) representing K precomputed proposal boxes for this image.
 + `proposal_objectness_logits` (array): numpy array with shape (K, ), which corresponds to the objectness
   logits of proposals in 'proposal_boxes'.
 + `proposal_bbox_mode` (int): the format of the precomputed proposal bbox.
   It must be a member of
   [structures.BoxMode](../modules/structures.html#detectron2.structures.BoxMode).
-  Default format is `BoxMode.XYXY_ABS`.
+  Default is `BoxMode.XYXY_ABS`.
 
 
-If your dataset is already in the COCO format, you can simply register it by
+If your dataset is already a json file in COCO format, you can simply register it by
 ```python
 from detectron2.data.datasets import register_coco_instances
 register_coco_instances("my_dataset", {}, "json_annotation.json", "path/to/image/dir")
@@ -94,12 +109,29 @@ which will take care of everything (including metadata) for you.
 If your dataset is in COCO format with custom per-instance annotations,
 the [load_coco_json](../modules/data.html#detectron2.data.datasets.load_coco_json) function can be used.
 
+#### Custom Dataset Dicts
+
+In the `list[dict]` that your dataset function return, the dictionary can also has arbitrary custom data.
+This can be useful when you're doing a new task and needs extra information not supported
+by the standard dataset dicts. In this case, you need to make sure the downstream code can handle your data
+correctly. Usually this requires writing a new `mapper` for the dataloader (see [Use Custom Dataloaders](data_loading.html))
+
+When designing your custom format, note that all dicts are stored in memory
+(sometimes serialized and with multiple copies).
+To save memory, each dict is meant to contain small but sufficient information
+about each sample, such as file names and annotations.
+Loading full samples typically happens in the data loader.
+
+For attributes shared among the entire dataset, use `Metadata` (see below).
+To avoid exmemory, do not save such information repeatly for each sample.
+
 
 ### "Metadata" for Datasets
 
 Each dataset is associated with some metadata, accessible through
 `MetadataCatalog.get(dataset_name).some_metadata`.
-Metadata is a key-value mapping that contains primitive information that helps interpret what's in the dataset, e.g.,
+Metadata is a key-value mapping that contains information that's shared among
+the entire dataset, and usually is used to interpret what's in the dataset, e.g.,
 names of classes, colors of classes, root of files, etc.
 This information will be useful for augmentation, evaluation, visualization, logging, etc.
 The structure of metadata depends on the what is needed from the corresponding downstream code.
@@ -122,6 +154,9 @@ unavailable to you:
 * `thing_classes` (list[str]): Used by all instance detection/segmentation tasks.
   A list of names for each instance/thing category.
   If you load a COCO format dataset, it will be automatically set by the function `load_coco_json`.
+
+* `thing_colors` (list[tuple(r, g, b)]): Pre-defined color (in [0, 255]) for each thing category.
+  Used for visualization. If not given, random colors are used.
 
 * `stuff_classes` (list[str]): Used by semantic and panoptic segmentation tasks.
   A list of names for each stuff category.
@@ -155,8 +190,25 @@ Some additional metadata that are specific to the evaluation of certain datasets
    You can just provide the [DatasetEvaluator](../modules/evaluation.html#detectron2.evaluation.DatasetEvaluator)
    for your dataset directly in your main script.
 
-NOTE: For background on the difference between "thing" and "stuff" categories, see
+NOTE: For background on the concept of "thing" and "stuff", see
 [On Seeing Stuff: The Perception of Materials by Humans and Machines](http://persci.mit.edu/pub_pdfs/adelson_spie_01.pdf).
 In detectron2, the term "thing" is used for instance-level tasks,
 and "stuff" is used for semantic segmentation tasks.
 Both are used in panoptic segmentation.
+
+
+### Update the Config for New Datasets
+
+Once you've registered the dataset, you can use the name of the dataset (e.g., "my_dataset" in
+example above) in `DATASETS.{TRAIN,TEST}`.
+There are other configs you might want to change to train or evaluate on new datasets:
+
+* `MODEL.ROI_HEADS.NUM_CLASSES` and `MODEL.RETINANET.NUM_CLASSES` are the number of thing classes
+	for R-CNN and RetinaNet models.
+* `MODEL.ROI_KEYPOINT_HEAD.NUM_KEYPOINTS` sets the number of keypoints for Keypoint R-CNN.
+  You'll also need to set [Keypoint OKS](http://cocodataset.org/#keypoints-eval)
+	with `TEST.KEYPOINT_OKS_SIGMAS` for evaluation.
+* `MODEL.SEM_SEG_HEAD.NUM_CLASSES` sets the number of stuff classes for Semantic FPN & Panoptic FPN.
+* If you're training Fast R-CNN (with precomputed proposals), `DATASETS.PROPOSAL_FILES_{TRAIN,TEST}`
+	need to match the datasts. The format of proposal files are documented
+	[here](../modules/data.html#detectron2.data.load_proposals_into_dataset).
