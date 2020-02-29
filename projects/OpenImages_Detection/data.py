@@ -42,14 +42,16 @@ def load_openimages_json(json_file, image_root, dataset_name=None, extra_annotat
         next(reader) # skip the first line.
         for instance in reader:
             # filter IsDepiction
-            if instance[11] == 1:
+            if instance[11] == '1':
                 continue
             img_id = instance[0]
             im = Image.open(image_root + '/' + img_id + '.jpg')
             w, h = im.size
-            img_ids.append(instance[0])
+            img_ids.append(img_id)
             img_sizes.append((h, w))
-            boxes.append([instance[4], instance[6], instance[5], instance[7]])
+            x_min, x_max = float(instance[4])*(w-1), float(instance[5])*(w-1)
+            y_min, y_max = float(instance[6])*(w-1), float(instance[7])*(h-1)
+            boxes.append([x_min, y_min, x_max, y_max])
             # instance[10] IsGroupOf, unused.
             del im
 
@@ -68,7 +70,7 @@ def load_openimages_json(json_file, image_root, dataset_name=None, extra_annotat
             obj = {}
             # obj["iscrowd"] = is_groupof[i]
             obj["bbox"] = boxes[i]
-            obj["bbox_mode"] = BoxMode.XYXY_REL
+            obj["bbox_mode"] = BoxMode.XYXY_ABS
             obj["category_id"] = 1
             record["annotations"].append(obj)
             dataset_dicts.append(record)
@@ -77,7 +79,7 @@ def load_openimages_json(json_file, image_root, dataset_name=None, extra_annotat
             obj = {}
             # obj["iscrowd"] = is_groupof[i]
             obj["bbox"] = boxes[i]
-            obj["bbox_mode"] = BoxMode.XYXY_REL
+            obj["bbox_mode"] = BoxMode.XYXY_ABS
             obj["category_id"] = 1
             dataset_dicts[-1]["annotations"].append(obj)
     
