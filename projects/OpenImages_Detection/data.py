@@ -50,7 +50,7 @@ def load_openimages_json(json_file, image_root, dataset_name=None, extra_annotat
             img_ids.append(img_id)
             img_sizes.append((h, w))
             x_min, x_max = float(instance[4])*(w-1), float(instance[5])*(w-1)
-            y_min, y_max = float(instance[6])*(w-1), float(instance[7])*(h-1)
+            y_min, y_max = float(instance[6])*(h-1), float(instance[7])*(h-1)
             boxes.append([x_min, y_min, x_max, y_max])
             # instance[10] IsGroupOf, unused.
             del im
